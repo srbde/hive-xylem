@@ -34,7 +34,7 @@ Xylem is designed for modern Rust concurrency models:
 
 ### 🔌 Ecosystem Alignment
 
-Xylem is the Rust counterpart to **[Anther](https://github.com/thecrazygm/anther)** (Go), **[Pollen](https://github.com/srbde/pollen)** (TypeScript), and **[Nectar](https://github.com/srbde/hive-nectar)** (Python). Together, they form a unified, secure foundation for building cross-platform Hive applications under the **SRBDE** umbrella.
+Xylem is the Rust counterpart to **[Anther](https://github.com/srbde/anther)** (Go), **[Pollen](https://github.com/srbde/pollen)** (TypeScript), and **[Nectar](https://github.com/srbde/hive-nectar)** (Python). Together, they form a unified, secure foundation for building cross-platform Hive applications under the **SRBDE** umbrella.
 
 ---
 
@@ -44,7 +44,7 @@ Add `xylem` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-xylem = { git = "https://github.com/thecrazygm/xylem.git" }
+xylem = { git = "https://github.com/srbde/xylem.git" }
 tokio = { version = "1.0", features = ["full"] }
 ```
 
