@@ -136,6 +136,37 @@ ACTIVE_WIF="your_wif_key" cargo run --example verify-keys
 
 ---
 
-## 📄 License
+---
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+## 📜 Standing on Shoulders
+
+Xylem is a completely original Rust library designed from the ground up to bring Hive development to the Rust ecosystem. It was built using the TAPOS headers, transaction signatures, and cryptographic standards verified by the SRBDE team to ensure 100% mathematical consensus compatibility with the Hive blockchain.
+
+---
+
+## 🌐 Built by SRBDE
+
+**Xylem** is developed and maintained by the **Sustainable Resource and Business Development Enterprise (SRBDE)** — an open-source infrastructure organization building tools and platforms for communities that build things together.
+
+We apply the logic of agricultural sustainability to software: the goal is always to return more to the ecosystem than we extract.
+
+- **Open source is our value, not just our business model.**
+- **Our commercial products fund our open-source core. The open work is the mission.**
+
+### Explore the Ecosystem
+
+| Project                                               | Description                       |
+| ----------------------------------------------------- | --------------------------------- |
+| [Pollen](https://github.com/srbde/pollen)             | The modern Hive TypeScript SDK    |
+| [Anther](https://github.com/thecrazygm/anther)        | The modern Hive Go SDK            |
+| [Xylem](https://github.com/srbde/xylem)               | The modern Hive Rust SDK          |
+| [Hive-Nectar](https://github.com/srbde/hive-nectar)   | The modern Hive Python SDK        |
+| [nectarengine](https://github.com/srbde/nectarengine) | The Hive-Engine sidechain library |
+| [ecoinstats.net](https://ecoinstats.net)              | SRBDE corporate hub               |
+| [thecrazygm.com](https://thecrazygm.com)              | Open gaming tools & TTRPGs        |
+
+---
+
+## 🤝 Contributing
+
+Audits, forks, and pull requests are welcome. **Xylem** is built to last for the decade, not the quarter. If you find a security issue, please open a private advisory rather than a public issue.
