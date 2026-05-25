@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Querying account...");
     let accounts = client.get_accounts(&["thecrazygm".to_string()]).await?;
-    
+
     if let Some(acc) = accounts.first() {
         println!("Account:      @{}", acc.name);
         println!("HIVE Balance: {}", acc.balance);
@@ -83,19 +83,19 @@ use chrono::Utc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new(vec!["https://api.hive.blog".to_string()], 30);
-    
+
     // Get dynamic global properties to get TaPoS parameters
     let props = client.get_dynamic_global_properties().await?;
     let ref_block_num = (props.head_block_number & 0xFFFF) as u16;
-    
+
     // Extract block prefix from head block ID
     let prefix_bytes = hex::decode(&props.head_block_id[8..16])?;
     let ref_block_prefix = u32::from_le_bytes(prefix_bytes.try_into().unwrap());
-    
+
     // Create transaction set to expire in 1 minute
     let expiration = HiveTime(Utc::now().naive_utc() + chrono::Duration::minutes(1));
     let mut tx = Transaction::new(ref_block_num, ref_block_prefix, expiration);
-    
+
     // Append a transfer operation
     tx.append_op(Box::new(Transfer {
         from: "youraccount".to_string(),
@@ -103,12 +103,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         amount: "1.000 HIVE".to_string(),
         memo: "Sent with Xylem 🧬".to_string(),
     }));
-    
+
     // Sign transaction with WIF active key and default mainnet chain ID
     let active_wif = "your-active-private-key-wif";
     let mainnet_chain_id = "beeab0de00000000000000000000000000000000000000000000000000000000";
     tx.sign(active_wif, mainnet_chain_id)?;
-    
+
     // Broadcast the signed transaction to the blockchain
     let response = client.broadcast_transaction(&tx).await?;
     println!("Broadcast Result: {}", response);
