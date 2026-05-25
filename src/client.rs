@@ -130,4 +130,11 @@ impl Client {
         let resp = self.call("condenser_api", "broadcast_transaction", serde_json::json!([tx_dict])).await?;
         Ok(resp)
     }
+
+    /// Retrieve account names associated with the given public keys.
+    pub async fn get_key_references(&self, keys: &[String]) -> Result<Vec<String>, XylemError> {
+        let resp = self.call("condenser_api", "get_key_references", serde_json::json!([keys])).await?;
+        let refs: Vec<Vec<String>> = serde_json::from_value(resp)?;
+        Ok(refs.into_iter().flatten().collect())
+    }
 }

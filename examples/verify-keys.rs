@@ -21,8 +21,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// Instantiate the client
 	let client = Client::new(vec!["https://api.hive.blog".to_string()], 30);
 
-	println!("Querying blockchain for @thecrazygm...");
-	let accounts = client.get_accounts(&["thecrazygm".to_string()]).await?;
+	println!("Looking up account names for the derived public key...");
+	let refs = client.get_key_references(&[derived_pub.clone()]).await?;
+	let account_name = if let Some(first_ref) = refs.first() {
+		println!("✓ Public key is registered to account: @{}", first_ref);
+		first_ref.clone()
+	} else {
+		println!("⚠️ Public key is not registered to any account. Falling back to @thecrazygm");
+		"thecrazygm".to_string()
+	};
+
+	println!("\nQuerying blockchain for @{}...", account_name);
+	let accounts = client.get_accounts(&[account_name]).await?;
 	if accounts.is_empty() {
 		eprintln!("Account not found");
 		std::process::exit(1);
