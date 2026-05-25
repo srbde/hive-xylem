@@ -1,6 +1,6 @@
 use crate::errors::XylemError;
 use crate::operations::Operation;
-use crate::types::HiveTime;
+use crate::types::{Authority, HiveTime};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -40,7 +40,7 @@ impl Transaction {
 
         // Write operations length (varint)
         buf.extend_from_slice(&crate::operations::serialize_varint(
-            self.operations.len() as u64,
+            self.operations.len() as u64
         ));
 
         // Write operations bytes
@@ -88,6 +88,47 @@ impl Transaction {
             "signatures": self.signatures
         })
     }
+
+    /// Sign transaction with multiple private WIF keys.
+    pub fn sign_many(&mut self, wifs: &[&str], chain_id: &str) -> Result<(), XylemError> {
+        for wif in wifs {
+            self.sign(wif, chain_id)?;
+        }
+        Ok(())
+    }
+
+    /// Verify if the accumulated signatures satisfy the provided authority's threshold.
+    pub fn verify_authority(&self, auth: &Authority, chain_id: &str) -> Result<bool, XylemError> {
+        if self.signatures.is_empty() {
+            return Err(XylemError::CryptoError(
+                "transaction has no signatures to verify".to_string(),
+            ));
+        }
+
+        let tx_bytes = self.to_bytes()?;
+        let chain_bytes = hex::decode(chain_id)
+            .map_err(|e| XylemError::HexError(format!("invalid chain_id hex: {}", e)))?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&chain_bytes);
+        hasher.update(&tx_bytes);
+        let digest = hasher.finalize();
+
+        let mut recovered_keys = std::collections::HashSet::new();
+        for sig in &self.signatures {
+            let pub_key_str = crate::crypto::recover_key_from_signature(sig, &digest)?;
+            recovered_keys.insert(pub_key_str);
+        }
+
+        let mut total_weight = 0u32;
+        for (key_str, weight) in &auth.key_auths {
+            if recovered_keys.contains(key_str) {
+                total_weight += *weight as u32;
+            }
+        }
+
+        Ok(total_weight >= auth.weight_threshold)
+    }
 }
 
 #[cfg(test)]
@@ -99,8 +140,7 @@ mod tests {
 
     #[test]
     fn test_transaction_serialization() {
-        let dt =
-            NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
         let mut tx = Transaction::new(1234, 56789, HiveTime(dt));
 
         let vote = Vote {
@@ -122,10 +162,41 @@ mod tests {
 
     #[test]
     fn test_transaction_id() {
-        let dt =
-            NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
         let tx = Transaction::new(1234, 56789, HiveTime(dt));
         let id = tx.id().unwrap();
         assert_eq!(id.len(), 40); // 20 bytes hex string is 40 chars
+    }
+
+    #[test]
+    fn test_verify_authority() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(1234, 56789, HiveTime(dt));
+
+        let vote = Vote {
+            voter: "alice".to_string(),
+            author: "bob".to_string(),
+            permlink: "hello-world".to_string(),
+            weight: 10000,
+        };
+        tx.append_op(Box::new(vote));
+
+        let wif = "5J3mBbAH58CpQ3Y5RNJpUKPE62SQ5tfcvU2JpbnkeyhfsYB1Jcn";
+        let pub_key = crate::crypto::wif_to_public_key(wif).unwrap();
+        let chain_id = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        tx.sign(wif, chain_id).unwrap();
+
+        let mut key_auths = std::collections::HashMap::new();
+        key_auths.insert(pub_key, 1u16);
+
+        let auth = Authority {
+            weight_threshold: 1,
+            account_auths: std::collections::HashMap::new(),
+            key_auths,
+        };
+
+        let verified = tx.verify_authority(&auth, chain_id).unwrap();
+        assert!(verified);
     }
 }

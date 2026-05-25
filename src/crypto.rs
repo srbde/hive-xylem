@@ -89,6 +89,61 @@ pub fn sign_transaction_bytes(
     Ok(hex::encode(final_sig))
 }
 
+/// Recover the Hive public key string ("STM...") from a 65-byte hex-encoded signature
+/// and a 32-byte message digest.
+pub fn recover_key_from_signature(
+    signature_hex: &str,
+    digest: &[u8],
+) -> Result<String, XylemError> {
+    let sig_bytes = hex::decode(signature_hex)
+        .map_err(|e| XylemError::HexError(format!("invalid signature hex: {}", e)))?;
+    if sig_bytes.len() != 65 {
+        return Err(XylemError::CryptoError(format!(
+            "invalid signature length: expected 65, got {}",
+            sig_bytes.len()
+        )));
+    }
+    let recovery_byte = sig_bytes[0];
+    let rec_id_val = if recovery_byte >= 31 {
+        recovery_byte - 31
+    } else if recovery_byte >= 27 {
+        recovery_byte - 27
+    } else {
+        return Err(XylemError::CryptoError(format!(
+            "invalid recovery byte: {}",
+            recovery_byte
+        )));
+    };
+    let rec_id = secp256k1::ecdsa::RecoveryId::from_i32(rec_id_val as i32)
+        .map_err(|e| XylemError::CryptoError(format!("invalid recovery ID: {}", e)))?;
+
+    let secp = Secp256k1::new();
+    let signature = secp256k1::ecdsa::RecoverableSignature::from_compact(&sig_bytes[1..], rec_id)
+        .map_err(|e| {
+        XylemError::CryptoError(format!("failed to parse recoverable signature: {}", e))
+    })?;
+
+    let message = Message::from_digest_slice(digest)
+        .map_err(|e| XylemError::CryptoError(format!("invalid digest: {}", e)))?;
+
+    let pub_key = secp
+        .recover_ecdsa(&message, &signature)
+        .map_err(|e| XylemError::CryptoError(format!("failed to recover public key: {}", e)))?;
+
+    let pub_bytes = pub_key.serialize(); // 33-byte compressed public key
+
+    // RIPEMD160 checksum
+    let mut hasher = Ripemd160::new();
+    hasher.update(pub_bytes);
+    let checksum = hasher.finalize();
+
+    let mut payload = pub_bytes.to_vec();
+    payload.extend_from_slice(&checksum[0..4]);
+
+    let base58_str = bs58::encode(payload).into_string();
+    Ok(format!("STM{}", base58_str))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +163,23 @@ mod tests {
     fn test_wif_to_public_key() {
         let pub_key = wif_to_public_key(test_wif()).unwrap();
         assert!(pub_key.starts_with("STM"));
+    }
+
+    #[test]
+    fn test_signature_recovery() {
+        let wif = test_wif();
+        let expected_pub = wif_to_public_key(wif).unwrap();
+
+        let tx_bytes = b"hello world";
+        let chain_id = "0000000000000000000000000000000000000000000000000000000000000000";
+        let sig = sign_transaction_bytes(tx_bytes, wif, chain_id).unwrap();
+
+        let mut hasher = Sha256::new();
+        hasher.update(hex::decode(chain_id).unwrap());
+        hasher.update(tx_bytes);
+        let digest = hasher.finalize();
+
+        let recovered = recover_key_from_signature(&sig, &digest).unwrap();
+        assert_eq!(recovered, expected_pub);
     }
 }

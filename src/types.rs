@@ -25,8 +25,7 @@ impl<'de> Deserialize<'de> for HiveTime {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let dt = NaiveDateTime::parse_from_str(&s, HIVE_TIME_FORMAT)
-            .map_err(de::Error::custom)?;
+        let dt = NaiveDateTime::parse_from_str(&s, HIVE_TIME_FORMAT).map_err(de::Error::custom)?;
         Ok(HiveTime(dt))
     }
 }
@@ -47,9 +46,9 @@ impl AssetAmount {
             )));
         }
 
-        let value = parts[0].parse::<f64>().map_err(|e| {
-            XylemError::SerializationError(format!("invalid float value: {}", e))
-        })?;
+        let value = parts[0]
+            .parse::<f64>()
+            .map_err(|e| XylemError::SerializationError(format!("invalid float value: {}", e)))?;
 
         Ok(AssetAmount {
             value,
@@ -135,12 +134,10 @@ where
 {
     let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
     match value {
-        serde_json::Value::Number(num) => {
-            num.as_f64().ok_or_else(|| de::Error::custom("invalid float number"))
-        }
-        serde_json::Value::String(s) => {
-            s.parse::<f64>().map_err(de::Error::custom)
-        }
+        serde_json::Value::Number(num) => num
+            .as_f64()
+            .ok_or_else(|| de::Error::custom("invalid float number")),
+        serde_json::Value::String(s) => s.parse::<f64>().map_err(de::Error::custom),
         _ => Err(de::Error::custom("unexpected mana value type")),
     }
 }
@@ -163,4 +160,145 @@ pub struct BlockHeader {
     pub timestamp: HiveTime,
     pub witness: String,
     pub transaction_merkle_root: String,
+}
+
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Authority {
+    pub weight_threshold: u32,
+    pub account_auths: HashMap<String, u16>,
+    pub key_auths: HashMap<String, u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RCInfo {
+    pub last_mana: i64,
+    pub current_mana: i64,
+    pub max_mana: i64,
+    pub last_update_time: i64,
+    pub last_percent: f64,
+    pub current_percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Price {
+    pub base: String,
+    pub quote: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainProperties {
+    pub account_creation_fee: String,
+    pub maximum_block_size: u32,
+    pub hbd_interest_rate: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VestingDelegation {
+    pub id: u64,
+    pub delegator: String,
+    pub delegatee: String,
+    pub vesting_shares: String,
+    pub min_delegation_time: HiveTime,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OperationTuple(pub String, pub serde_json::Value);
+
+impl<'de> Deserialize<'de> for OperationTuple {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let val = serde_json::Value::deserialize(deserializer)?;
+        if let Some(arr) = val.as_array() {
+            if arr.len() == 2 {
+                let name = arr[0]
+                    .as_str()
+                    .ok_or_else(|| de::Error::custom("operation name is not a string"))?
+                    .to_string();
+                let body = arr[1].clone();
+                return Ok(OperationTuple(name, body));
+            }
+            return Err(de::Error::custom("invalid operation tuple array size"));
+        } else if let Some(obj) = val.as_object() {
+            let name = obj
+                .get("type")
+                .and_then(|t| t.as_str())
+                .ok_or_else(|| de::Error::custom("operation object missing string field 'type'"))?
+                .to_string();
+            let body = obj.get("value").cloned().unwrap_or(serde_json::Value::Null);
+            return Ok(OperationTuple(name, body));
+        }
+        Err(de::Error::custom("invalid operation tuple format"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionInBlock {
+    pub ref_block_num: u16,
+    pub ref_block_prefix: u32,
+    pub expiration: HiveTime,
+    pub operations: Vec<OperationTuple>,
+    pub extensions: Vec<serde_json::Value>,
+    pub signatures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Block {
+    pub block_id: String,
+    pub previous: String,
+    pub timestamp: HiveTime,
+    pub witness: String,
+    pub transaction_merkle_root: String,
+    pub extensions: Vec<serde_json::Value>,
+    pub witness_signature: String,
+    pub transactions: Vec<TransactionInBlock>,
+    pub transaction_ids: Vec<String>,
+    pub signing_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppliedOperation {
+    pub trx_id: String,
+    pub block: u32,
+    pub trx_in_block: u32,
+    pub op_in_trx: u32,
+    pub virtual_op: bool,
+    pub op: OperationTuple,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryItem {
+    pub seq: u64,
+    pub op: AppliedOperation,
+}
+
+impl<'de> Deserialize<'de> for HistoryItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let arr = Vec::<serde_json::Value>::deserialize(deserializer)?;
+        if arr.len() != 2 {
+            return Err(de::Error::custom(
+                "invalid history item format: expected 2 elements",
+            ));
+        }
+        let seq = arr[0]
+            .as_u64()
+            .ok_or_else(|| de::Error::custom("history item sequence is not a u64"))?;
+        let op: AppliedOperation =
+            serde_json::from_value(arr[1].clone()).map_err(de::Error::custom)?;
+        Ok(HistoryItem { seq, op })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StreamingMode {
+    #[serde(rename = "latest")]
+    Latest,
+    #[serde(rename = "irreversible")]
+    Irreversible,
 }
