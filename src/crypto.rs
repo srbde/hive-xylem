@@ -21,10 +21,7 @@ pub fn decode_wif(wif: &str) -> Result<Vec<u8>, XylemError> {
         )));
     }
 
-    // A WIF key has a 1-byte version prefix (0x80) + 32-byte private key + optional 1-byte compression flag (0x01)
-    let priv_bytes = if decoded.len() == 33 {
-        decoded[1..33].to_vec()
-    } else if decoded.len() == 34 && decoded[33] == 0x01 {
+    let priv_bytes = if decoded.len() == 33 || (decoded.len() == 34 && decoded[33] == 0x01) {
         decoded[1..33].to_vec()
     } else {
         return Err(XylemError::WifError(format!(
@@ -48,7 +45,7 @@ pub fn wif_to_public_key(wif: &str) -> Result<String, XylemError> {
 
     // RIPEMD160 checksum
     let mut hasher = Ripemd160::new();
-    hasher.update(&pub_bytes);
+    hasher.update(pub_bytes);
     let checksum = hasher.finalize();
 
     let mut payload = pub_bytes.to_vec();

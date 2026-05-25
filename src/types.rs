@@ -95,9 +95,7 @@ impl AssetAmount {
         // Write symbol padded to 7 bytes
         let symbol_bytes = wire_symbol.as_bytes();
         buf.extend_from_slice(symbol_bytes);
-        for _ in symbol_bytes.len()..7 {
-            buf.push(0);
-        }
+        buf.extend(std::iter::repeat_n(0, 7 - symbol_bytes.len()));
 
         Ok(buf)
     }
