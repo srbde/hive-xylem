@@ -68,19 +68,45 @@ impl Client {
 
                 match res {
                     Ok(resp) => {
-                        let body_val: Value = resp.json().await?;
-                        if let Some(err_val) = body_val.get("error") {
-                            let err_msg = err_val
-                                .get("message")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("RPC error");
-                            return Err(XylemError::RpcError(err_msg.to_string()));
+                        if !resp.status().is_success() {
+                            last_err = Some(XylemError::RpcError(format!(
+                                "HTTP status {}",
+                                resp.status()
+                            )));
+                            self.rotate_node();
+                            continue;
                         }
-                        if let Some(res_val) = body_val.get("result") {
-                            return Ok(res_val.clone());
+                        match resp.json::<Value>().await {
+                            Ok(body_val) => {
+                                if let Some(err_val) = body_val.get("error") {
+                                    let err_code = err_val.get("code").and_then(|c| c.as_i64());
+                                    if let Some(code) = err_code {
+                                        if code == -32601 || code == -32603 {
+                                            last_err = Some(XylemError::RpcError(format!(
+                                                "node returned JSON-RPC error code {}",
+                                                code
+                                            )));
+                                            self.rotate_node();
+                                            continue;
+                                        }
+                                    }
+                                    let err_msg = err_val
+                                        .get("message")
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("RPC error");
+                                    return Err(XylemError::RpcError(err_msg.to_string()));
+                                }
+                                if let Some(res_val) = body_val.get("result") {
+                                    return Ok(res_val.clone());
+                                }
+                                last_err = Some(XylemError::RpcError(
+                                    "invalid response format".to_string(),
+                                ));
+                            }
+                            Err(err) => {
+                                last_err = Some(XylemError::RpcError(err.to_string()));
+                            }
                         }
-                        last_err =
-                            Some(XylemError::RpcError("invalid response format".to_string()));
                     }
                     Err(err) => {
                         last_err = Some(XylemError::HttpError(err.to_string()));
@@ -583,5 +609,74 @@ impl Client {
         });
 
         rx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_client_failover() {
+        // Start a local server 1 that returns 502
+        let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port1 = listener1.local_addr().unwrap().port();
+        let url1 = format!("http://127.0.0.1:{}", port1);
+
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener1.accept().await {
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf).await;
+                let response = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        // Start a local server 2 that returns JSON-RPC -32603, then success
+        let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port2 = listener2.local_addr().unwrap().port();
+        let url2 = format!("http://127.0.0.1:{}", port2);
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+
+        tokio::spawn(async move {
+            // First call (fails with JSON-RPC error)
+            if let Ok((mut stream, _)) = listener2.accept().await {
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf).await;
+                call_count_clone.fetch_add(1, Ordering::Relaxed);
+                let response_body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+            // Second call (succeeds)
+            if let Ok((mut stream, _)) = listener2.accept().await {
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf).await;
+                call_count_clone.fetch_add(1, Ordering::Relaxed);
+                let response_body = r#"{"jsonrpc":"2.0","id":1,"result":"success"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let client = Client::new(vec![url1, url2], 2);
+        let res = client.call("test", "method", json!([])).await.unwrap();
+        assert_eq!(res.as_str().unwrap(), "success");
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 }
