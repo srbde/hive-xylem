@@ -1,6 +1,6 @@
 # 🧬 Xylem
 
-**The modern, secure, and high-performance Rust SDK for the Hive blockchain. Built for 2026 and beyond.**
+**The modern, secure, and high-performance Rust SDK for the Hive blockchain. Built for production. Made to last.**
 
 Rust is built for ultimate memory safety, blazing-fast performance, and zero-cost abstractions. **Xylem** brings those strengths to the Hive blockchain. It is designed from the ground up to provide secure, offline transaction serialization and signing, multi-signature authority validation, and native async-first blockchain queries.
 
