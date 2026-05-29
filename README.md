@@ -34,7 +34,7 @@ Xylem is designed for modern Rust concurrency models:
 
 ### 🔌 Ecosystem Alignment
 
-Xylem is the Rust counterpart to **[Anther](https://github.com/srbde/anther)** (Go), **[Pollen](https://github.com/srbde/pollen)** (TypeScript), and **[Nectar](https://github.com/srbde/hive-nectar)** (Python). Together, they form a unified, secure foundation for building cross-platform Hive applications under the **SRBDE** umbrella.
+Xylem is the Rust counterpart to **[Anther](https://github.com/srbde/hive-anther)** (Go), **[Pollen](https://github.com/srbde/hive-pollen)** (TypeScript), and **[Nectar](https://github.com/srbde/hive-nectar)** (Python). Together, they form a unified, secure foundation for building cross-platform Hive applications under the **SRBDE** umbrella.
 
 ---
 
@@ -44,7 +44,7 @@ Add `xylem` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-xylem = { git = "https://github.com/srbde/xylem.git" }
+xylem = { git = "https://github.com/srbde/hive-xylem.git" }
 tokio = { version = "1.0", features = ["full"] }
 ```
 
@@ -157,9 +157,9 @@ We apply the logic of agricultural sustainability to software: the goal is alway
 
 | Project                                               | Description                       |
 | ----------------------------------------------------- | --------------------------------- |
-| [Pollen](https://github.com/srbde/pollen)             | The modern Hive TypeScript SDK    |
-| [Anther](https://github.com/srbde/anther)             | The modern Hive Go SDK            |
-| [Xylem](https://github.com/srbde/xylem)               | The modern Hive Rust SDK          |
+| [Pollen](https://github.com/srbde/hive-pollen)             | The modern Hive TypeScript SDK    |
+| [Anther](https://github.com/srbde/hive-anther)             | The modern Hive Go SDK            |
+| [Xylem](https://github.com/srbde/hive-xylem)               | The modern Hive Rust SDK          |
 | [Nectar](https://github.com/srbde/hive-nectar)        | The modern Hive Python SDK        |
 | [nectarengine](https://github.com/srbde/nectarengine) | The Hive-Engine sidechain library |
 | [ecoinstats.net](https://ecoinstats.net)              | SRBDE corporate hub               |
