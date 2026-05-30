@@ -1,7 +1,13 @@
 [package]
-name = "xylem"
+name = "hive-xylem"
 version = "0.1.0"
 edition = "2021"
+description = "Modern, secure, and high-performance Rust SDK for the Hive blockchain."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/srbde/hive-xylem"
+readme = "README.md"
+keywords = ["hive", "blockchain", "sdk", "crypto"]
+categories = ["development-tools", "api-bindings"]
 
 [dependencies]
 secp256k1 = { version = "0.29", features = ["recovery", "global-context"] }

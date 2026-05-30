@@ -1,6 +1,6 @@
+use hive_xylem::memo;
+use hive_xylem::{Client, StreamingMode};
 use std::sync::Arc;
-use xylem::memo;
-use xylem::{Client, StreamingMode};
 
 #[tokio::main]
 async fn main() {
@@ -152,7 +152,7 @@ async fn main() {
     println!("🔐 [PHASE 9] ECIES Memo Encryption & Decryption...");
     let sender_wif = "5J3mBbAH58CpQ3Y5RNJpUKPE62SQ5tfcvU2JpbnkeyhfsYB1Jcn";
     let recipient_wif = "5J3mBbAH58CpQ3Y5RNJpUKPE62SQ5tfcvU2JpbnkeyhfsYB1Jcn"; // standard WIF for testing
-    let recipient_pub = xylem::crypto::wif_to_public_key(recipient_wif).unwrap();
+    let recipient_pub = hive_xylem::crypto::wif_to_public_key(recipient_wif).unwrap();
 
     let secret_memo = "#This is a secret memo! 🤫";
     println!("Raw Memo:        {}", secret_memo);

@@ -1,6 +1,6 @@
+use hive_xylem::crypto::wif_to_public_key;
+use hive_xylem::Client;
 use std::env;
-use xylem::crypto::wif_to_public_key;
-use xylem::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

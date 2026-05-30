@@ -40,18 +40,18 @@ Xylem is the Rust counterpart to **[Anther](https://github.com/srbde/hive-anther
 
 ## 🚀 Quick Start
 
-Add `xylem` to your `Cargo.toml`:
+Add `hive-xylem` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-xylem = { git = "https://github.com/srbde/hive-xylem.git" }
+hive-xylem = "0.1.0"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
 ### Read Account Data
 
 ```rust
-use xylem::Client;
+use hive_xylem::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,9 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Sign and Broadcast a Transaction
 
 ```rust
-use xylem::{Client, Transaction};
-use xylem::operations::Transfer;
-use xylem::types::HiveTime;
+use hive_xylem::{Client, Transaction};
+use hive_xylem::operations::Transfer;
+use hive_xylem::types::HiveTime;
 use chrono::Utc;
 
 #[tokio::main]
