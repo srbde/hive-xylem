@@ -51,6 +51,7 @@ tokio = { version = "1.0", features = ["full"] }
 ### Read Account Data
 
 ```rust
+use hive_xylem::types::AssetAmount;
 use hive_xylem::Client;
 
 #[tokio::main]
@@ -62,9 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let accounts = client.get_accounts(&["thecrazygm".to_string()]).await?;
 
     if let Some(acc) = accounts.first() {
+        let vests = AssetAmount::parse(&acc.vesting_shares)?.value;
+        let hp = client.vests_to_hp(vests).await?;
+
         println!("Account:      @{}", acc.name);
         println!("HIVE Balance: {}", acc.balance);
         println!("HBD Balance:  {}", acc.hbd_balance);
+        println!("Hive Power:   {:.3} HP", hp);
         println!("Voting Power: {:.2}%", acc.voting_power / 100.0);
     }
 

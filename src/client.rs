@@ -1,8 +1,8 @@
 use crate::errors::XylemError;
 use crate::transaction::Transaction;
 use crate::types::{
-    AccountData, AppliedOperation, Block, BlockHeader, ChainProperties, DynamicGlobalProperties,
-    HistoryItem, Price, RCInfo, StreamingMode, VestingDelegation,
+    AccountData, AppliedOperation, AssetAmount, Block, BlockHeader, ChainProperties,
+    DynamicGlobalProperties, HistoryItem, Price, RCInfo, StreamingMode, VestingDelegation,
 };
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -139,6 +139,28 @@ impl Client {
             .await?;
         let props: DynamicGlobalProperties = serde_json::from_value(resp)?;
         Ok(props)
+    }
+
+    /// Convert a VESTS value to Hive Power (HP) using current dynamic global properties.
+    pub async fn vests_to_hp(&self, vests: f64) -> Result<f64, XylemError> {
+        let props = self.get_dynamic_global_properties().await?;
+        let fund = AssetAmount::parse(&props.total_vesting_fund_hive).map_err(|err| {
+            XylemError::SerializationError(format!(
+                "failed to parse total_vesting_fund_hive: {}",
+                err
+            ))
+        })?;
+        let shares = AssetAmount::parse(&props.total_vesting_shares).map_err(|err| {
+            XylemError::SerializationError(format!("failed to parse total_vesting_shares: {}", err))
+        })?;
+
+        if shares.value == 0.0 {
+            return Err(XylemError::SerializationError(
+                "total_vesting_shares is zero".to_string(),
+            ));
+        }
+
+        Ok(vests * (fund.value / shares.value))
     }
 
     /// Retrieve account data.
@@ -620,6 +642,73 @@ mod tests {
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    async fn spawn_single_response_server(response_body: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}", port);
+
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0; 4096];
+                let _ = stream.read(&mut buf).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        url
+    }
+
+    #[tokio::test]
+    async fn test_vests_to_hp() {
+        let response_body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "head_block_number": 100,
+                "head_block_id": "0000006400000000000000000000000000000000",
+                "time": "2026-06-09T12:00:00",
+                "last_irreversible_block_num": 90,
+                "total_vesting_fund_hive": "200000000.000 HIVE",
+                "total_vesting_shares": "400000000000.000000 VESTS"
+            }
+        })
+        .to_string();
+        let url = spawn_single_response_server(response_body).await;
+        let client = Client::new(vec![url], 2);
+
+        let hp = client.vests_to_hp(10_000_000.0).await.unwrap();
+
+        assert_eq!(hp, 5000.0);
+    }
+
+    #[tokio::test]
+    async fn test_vests_to_hp_rejects_zero_total_vesting_shares() {
+        let response_body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "head_block_number": 100,
+                "head_block_id": "0000006400000000000000000000000000000000",
+                "time": "2026-06-09T12:00:00",
+                "last_irreversible_block_num": 90,
+                "total_vesting_fund_hive": "200000000.000 HIVE",
+                "total_vesting_shares": "0.000000 VESTS"
+            }
+        })
+        .to_string();
+        let url = spawn_single_response_server(response_body).await;
+        let client = Client::new(vec![url], 2);
+
+        let err = client.vests_to_hp(10_000_000.0).await.unwrap_err();
+
+        assert!(err.to_string().contains("total_vesting_shares is zero"));
+    }
 
     #[tokio::test]
     async fn test_client_failover() {

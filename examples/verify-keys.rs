@@ -1,4 +1,5 @@
 use hive_xylem::crypto::wif_to_public_key;
+use hive_xylem::types::AssetAmount;
 use hive_xylem::Client;
 use std::env;
 
@@ -41,10 +42,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let acc = &accounts[0];
+    let vests = AssetAmount::parse(&acc.vesting_shares)?.value;
+    let hp = client.vests_to_hp(vests).await?;
     println!("✓ Account Name:  @{}", acc.name);
     println!("  HIVE Balance:  {}", acc.balance);
     println!("  HBD Balance:   {}", acc.hbd_balance);
     println!("  Vesting:       {}", acc.vesting_shares);
+    println!("  Hive Power:    {:.3} HP", hp);
     println!("  Voting Power:  {:.2}%", acc.voting_power / 100.0);
 
     println!("\n=== Example Completed Successfully ===");

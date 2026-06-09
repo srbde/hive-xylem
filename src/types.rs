@@ -118,6 +118,8 @@ pub struct DynamicGlobalProperties {
     pub head_block_id: String,
     pub time: HiveTime,
     pub last_irreversible_block_num: u32,
+    pub total_vesting_fund_hive: String,
+    pub total_vesting_shares: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
