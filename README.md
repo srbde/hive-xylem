@@ -44,7 +44,7 @@ Add `hive-xylem` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hive-xylem = "0.1.0"
+hive-xylem = "0.1.1"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
