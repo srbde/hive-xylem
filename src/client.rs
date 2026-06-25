@@ -28,6 +28,10 @@ impl Client {
         }
     }
 
+    pub fn nodes(&self) -> &Vec<String> {
+        &self.nodes
+    }
+
     fn get_current_node(&self) -> &str {
         if self.nodes.is_empty() {
             return "";

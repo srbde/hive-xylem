@@ -166,11 +166,74 @@ pub struct BlockHeader {
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Authority {
     pub weight_threshold: u32,
     pub account_auths: HashMap<String, u16>,
     pub key_auths: HashMap<String, u16>,
+}
+
+impl<'de> Deserialize<'de> for Authority {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAuthority {
+            weight_threshold: u32,
+            account_auths: serde_json::Value,
+            key_auths: serde_json::Value,
+        }
+
+        let raw = RawAuthority::deserialize(deserializer)?;
+
+        let account_auths = parse_auths(raw.account_auths).map_err(de::Error::custom)?;
+        let key_auths = parse_auths(raw.key_auths).map_err(de::Error::custom)?;
+
+        Ok(Authority {
+            weight_threshold: raw.weight_threshold,
+            account_auths,
+            key_auths,
+        })
+    }
+}
+
+fn parse_auths(val: serde_json::Value) -> Result<HashMap<String, u16>, String> {
+    match val {
+        serde_json::Value::Object(map) => {
+            let mut res = HashMap::new();
+            for (k, v) in map {
+                let weight = v
+                    .as_u64()
+                    .ok_or_else(|| "invalid weight: not a number".to_string())?
+                    as u16;
+                res.insert(k, weight);
+            }
+            Ok(res)
+        }
+        serde_json::Value::Array(arr) => {
+            let mut res = HashMap::new();
+            for item in arr {
+                let pair = item
+                    .as_array()
+                    .ok_or_else(|| "expected array of pairs".to_string())?;
+                if pair.len() != 2 {
+                    return Err("expected pair of [name/key, weight]".to_string());
+                }
+                let k = pair[0]
+                    .as_str()
+                    .ok_or_else(|| "key is not a string".to_string())?
+                    .to_string();
+                let weight = pair[1]
+                    .as_u64()
+                    .ok_or_else(|| "weight is not a number".to_string())?
+                    as u16;
+                res.insert(k, weight);
+            }
+            Ok(res)
+        }
+        _ => Err("expected object or array for authority auths".to_string()),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
