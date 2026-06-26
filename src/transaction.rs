@@ -269,4 +269,211 @@ mod tests {
         assert_eq!(ops[0][1]["to"], "bob");
         assert_eq!(ops[0][1]["memo"], "test memo");
     }
+
+    #[test]
+    fn test_vote_roundtrip() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(100, 200, HiveTime(dt));
+
+        let vote = Vote {
+            voter: "alice".to_string(),
+            author: "bob".to_string(),
+            permlink: "hello-world".to_string(),
+            weight: 5000,
+        };
+        tx.append_op(Box::new(vote));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        assert_eq!(tx2.ref_block_num, 100);
+        assert_eq!(tx2.ref_block_prefix, 200);
+        assert_eq!(tx2.operations.len(), 1);
+
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][0], "vote");
+        assert_eq!(ops[0][1]["voter"], "alice");
+        assert_eq!(ops[0][1]["author"], "bob");
+        assert_eq!(ops[0][1]["permlink"], "hello-world");
+        assert_eq!(ops[0][1]["weight"], 5000);
+    }
+
+    #[test]
+    fn test_comment_roundtrip() {
+        use crate::operations::Comment;
+
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(100, 200, HiveTime(dt));
+
+        let comment = Comment {
+            parent_author: "".to_string(),
+            parent_permlink: "test-parent".to_string(),
+            author: "alice".to_string(),
+            permlink: "my-post".to_string(),
+            title: "My Title".to_string(),
+            body: "Hello world, this is a test post body.".to_string(),
+            json_metadata: "{\"tags\":[\"test\"]}".to_string(),
+        };
+        tx.append_op(Box::new(comment));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        assert_eq!(tx2.operations.len(), 1);
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][0], "comment");
+        assert_eq!(ops[0][1]["parent_author"], "");
+        assert_eq!(ops[0][1]["parent_permlink"], "test-parent");
+        assert_eq!(ops[0][1]["author"], "alice");
+        assert_eq!(ops[0][1]["permlink"], "my-post");
+        assert_eq!(ops[0][1]["title"], "My Title");
+        assert_eq!(ops[0][1]["body"], "Hello world, this is a test post body.");
+        assert_eq!(ops[0][1]["json_metadata"], "{\"tags\":[\"test\"]}");
+    }
+
+    #[test]
+    fn test_custom_json_roundtrip() {
+        use crate::operations::CustomJson;
+
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(100, 200, HiveTime(dt));
+
+        let cj = CustomJson {
+            id: "follow".to_string(),
+            json: r#"["follow",{"follower":"alice","following":"bob","what":["blog"]}]"#
+                .to_string(),
+            required_auths: vec![],
+            required_posting_auths: vec!["alice".to_string()],
+        };
+        tx.append_op(Box::new(cj));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        assert_eq!(tx2.operations.len(), 1);
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][0], "custom_json");
+        assert_eq!(ops[0][1]["id"], "follow");
+        assert_eq!(
+            ops[0][1]["json"],
+            r#"["follow",{"follower":"alice","following":"bob","what":["blog"]}]"#
+        );
+        assert_eq!(
+            ops[0][1]["required_posting_auths"],
+            serde_json::json!(["alice"])
+        );
+    }
+
+    #[test]
+    fn test_multiple_operations_roundtrip() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(500, 99999, HiveTime(dt));
+
+        let vote = Vote {
+            voter: "alice".to_string(),
+            author: "bob".to_string(),
+            permlink: "post-1".to_string(),
+            weight: 10000,
+        };
+        tx.append_op(Box::new(vote));
+
+        let transfer = Transfer {
+            from: "alice".to_string(),
+            to: "bob".to_string(),
+            amount: "2.500 HIVE".to_string(),
+            memo: "pay".to_string(),
+        };
+        tx.append_op(Box::new(transfer));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        assert_eq!(tx2.ref_block_num, 500);
+        assert_eq!(tx2.ref_block_prefix, 99999);
+        assert_eq!(tx2.operations.len(), 2);
+
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][0], "vote");
+        assert_eq!(ops[1][0], "transfer");
+    }
+
+    #[test]
+    fn test_from_bytes_too_short() {
+        let result = Transaction::from_bytes(&[0u8; 5]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_bytes_invalid_op_id() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(100, 200, HiveTime(dt));
+        // Vote with empty strings to create minimal bytes, then corrupt the op ID
+        let vote = Vote {
+            voter: "a".to_string(),
+            author: "b".to_string(),
+            permlink: "c".to_string(),
+            weight: 1,
+        };
+        tx.append_op(Box::new(vote));
+
+        let mut bytes = tx.to_bytes().unwrap();
+        // The op ID is after ref_block_num(2) + ref_block_prefix(4) + expiration(4) + ops_count(1) = offset 11
+        // The op ID byte for Vote is 0x00; change it to an unsupported ID
+        bytes[11] = 99;
+
+        let result = Transaction::from_bytes(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_memo_transfer_roundtrip() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(100, 200, HiveTime(dt));
+
+        let transfer = Transfer {
+            from: "alice".to_string(),
+            to: "bob".to_string(),
+            amount: "10.000 HBD".to_string(),
+            memo: "".to_string(),
+        };
+        tx.append_op(Box::new(transfer));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][1]["amount"], "10.000 HBD");
+        assert_eq!(ops[0][1]["memo"], "");
+    }
+
+    #[test]
+    fn test_large_varint_roundtrip() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(65535, u32::MAX, HiveTime(dt));
+
+        let vote = Vote {
+            voter: "longvotername123".to_string(),
+            author: "longauthorname456".to_string(),
+            permlink: "this-is-a-really-long-permlink-that-tests-varint-encoding-at-higher-values"
+                .to_string(),
+            weight: -10000,
+        };
+        tx.append_op(Box::new(vote));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        assert_eq!(tx2.ref_block_num, 65535);
+        assert_eq!(tx2.ref_block_prefix, u32::MAX);
+
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][1]["voter"], "longvotername123");
+        assert_eq!(ops[0][1]["weight"], -10000);
+    }
 }

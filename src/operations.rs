@@ -842,6 +842,148 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn test_deserialize_varint_single_byte() {
+        let bytes = [0x00];
+        let mut pos = 0;
+        let val = deserialize_varint(&bytes, &mut pos).unwrap();
+        assert_eq!(val, 0);
+        assert_eq!(pos, 1);
+    }
+
+    #[test]
+    fn test_deserialize_varint_multi_byte() {
+        // LEB128 encoding of 300 = 0x12C = 0xAC 0x02
+        let bytes = [0xAC, 0x02];
+        let mut pos = 0;
+        let val = deserialize_varint(&bytes, &mut pos).unwrap();
+        assert_eq!(val, 300);
+        assert_eq!(pos, 2);
+    }
+
+    #[test]
+    fn test_deserialize_varint_truncated() {
+        // Continuation bit set but no following byte
+        let bytes = [0x80];
+        let mut pos = 0;
+        let result = deserialize_varint(&bytes, &mut pos);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_string_basic() {
+        let mut buf = Vec::new();
+        serialize_string(&mut buf, "hello");
+        let mut pos = 0;
+        let s = deserialize_string(&buf, &mut pos).unwrap();
+        assert_eq!(s, "hello");
+        assert_eq!(pos, buf.len());
+    }
+
+    #[test]
+    fn test_deserialize_string_empty() {
+        let mut buf = Vec::new();
+        serialize_string(&mut buf, "");
+        let mut pos = 0;
+        let s = deserialize_string(&buf, &mut pos).unwrap();
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn test_deserialize_string_truncated() {
+        // Manually write a length prefix of 10 but only 3 bytes of content
+        let bytes = [0x0A, b'a', b'b', b'c'];
+        let mut pos = 0;
+        let result = deserialize_string(&bytes, &mut pos);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_string_array_roundtrip() {
+        let strings = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        let mut buf = Vec::new();
+        serialize_string_array(&mut buf, &strings);
+        let mut pos = 0;
+        let result = deserialize_string_array(&buf, &mut pos).unwrap();
+        assert_eq!(result, strings);
+    }
+
+    #[test]
+    fn test_deserialize_string_array_empty() {
+        let strings: Vec<String> = vec![];
+        let mut buf = Vec::new();
+        serialize_string_array(&mut buf, &strings);
+        let mut pos = 0;
+        let result = deserialize_string_array(&buf, &mut pos).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_asset_amount_from_bytes_hive() {
+        let asset = AssetAmount::parse("1.000 HIVE").unwrap();
+        let bytes = asset.to_bytes().unwrap();
+        let mut pos = 0;
+        let restored = AssetAmount::from_bytes(&bytes, &mut pos).unwrap();
+        assert_eq!(restored.value, 1.0);
+        assert_eq!(restored.symbol, "HIVE");
+    }
+
+    #[test]
+    fn test_asset_amount_from_bytes_hbd() {
+        let asset = AssetAmount::parse("25.500 HBD").unwrap();
+        let bytes = asset.to_bytes().unwrap();
+        let mut pos = 0;
+        let restored = AssetAmount::from_bytes(&bytes, &mut pos).unwrap();
+        assert_eq!(restored.value, 25.5);
+        assert_eq!(restored.symbol, "HBD");
+    }
+
+    #[test]
+    fn test_asset_amount_from_bytes_vests() {
+        let asset = AssetAmount::parse("1000.123456 VESTS").unwrap();
+        let bytes = asset.to_bytes().unwrap();
+        let mut pos = 0;
+        let restored = AssetAmount::from_bytes(&bytes, &mut pos).unwrap();
+        assert_eq!(restored.value, 1000.123456);
+        assert_eq!(restored.symbol, "VESTS");
+    }
+
+    #[test]
+    fn test_asset_amount_from_bytes_truncated() {
+        let bytes = [0u8; 10]; // Only 10 bytes, need 16
+        let mut pos = 0;
+        let result = AssetAmount::from_bytes(&bytes, &mut pos);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_asset_amount_steem_to_hive_mapping() {
+        // Simulate a binary asset with STEEM symbol (as seen on the wire)
+        let mut bytes = Vec::new();
+        // 1.000 STEEM = 1000 satoshis
+        bytes.extend_from_slice(&1000i64.to_le_bytes());
+        bytes.push(3); // precision
+        bytes.extend_from_slice(b"STEEM\0\0"); // symbol padded to 7
+
+        let mut pos = 0;
+        let restored = AssetAmount::from_bytes(&bytes, &mut pos).unwrap();
+        assert_eq!(restored.value, 1.0);
+        assert_eq!(restored.symbol, "HIVE"); // mapped back to HIVE
+    }
+
+    #[test]
+    fn test_asset_amount_sbd_to_hbd_mapping() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5000i64.to_le_bytes());
+        bytes.push(3);
+        bytes.extend_from_slice(b"SBD\0\0\0\0");
+
+        let mut pos = 0;
+        let restored = AssetAmount::from_bytes(&bytes, &mut pos).unwrap();
+        assert_eq!(restored.value, 5.0);
+        assert_eq!(restored.symbol, "HBD");
+    }
+
+    #[test]
     fn test_operations_serialization() {
         // Test DeleteComment
         let op = DeleteComment {
