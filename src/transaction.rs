@@ -1,6 +1,7 @@
 use crate::errors::XylemError;
-use crate::operations::Operation;
+use crate::operations::{deserialize_op, deserialize_varint, Operation};
 use crate::types::{Authority, HiveTime};
+use chrono::NaiveDateTime;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -21,6 +22,47 @@ impl Transaction {
             operations: Vec::new(),
             signatures: Vec::new(),
         }
+    }
+
+    /// Deserialize transaction from binary bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, XylemError> {
+        let mut pos = 0;
+
+        if bytes.len() < 14 {
+            return Err(XylemError::SerializationError(
+                "transaction too short".to_string(),
+            ));
+        }
+
+        let ref_block_num = u16::from_le_bytes([bytes[0], bytes[1]]);
+        pos += 2;
+        let ref_block_prefix = u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
+        pos += 4;
+        let exp_seconds = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
+        pos += 4;
+        let expiration = HiveTime(
+            NaiveDateTime::from_timestamp_opt(exp_seconds as i64, 0).ok_or_else(|| {
+                XylemError::SerializationError("invalid expiration timestamp".to_string())
+            })?,
+        );
+
+        let ops_count = deserialize_varint(bytes, &mut pos)? as usize;
+        let mut operations: Vec<Box<dyn Operation>> = Vec::with_capacity(ops_count);
+        for _ in 0..ops_count {
+            let op_id = deserialize_varint(bytes, &mut pos)?;
+            operations.push(deserialize_op(op_id, bytes, &mut pos)?);
+        }
+
+        let _extensions_count = bytes[pos];
+        pos += 1;
+
+        Ok(Transaction {
+            ref_block_num,
+            ref_block_prefix,
+            expiration,
+            operations,
+            signatures: Vec::new(),
+        })
     }
 
     pub fn append_op(&mut self, op: Box<dyn Operation>) {
@@ -134,7 +176,7 @@ impl Transaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::Vote;
+    use crate::operations::{Transfer, Vote};
     use crate::types::HiveTime;
     use chrono::NaiveDateTime;
 
@@ -198,5 +240,33 @@ mod tests {
 
         let verified = tx.verify_authority(&auth, chain_id).unwrap();
         assert!(verified);
+    }
+
+    #[test]
+    fn test_transfer_roundtrip() {
+        let dt = NaiveDateTime::parse_from_str("2026-05-25T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap();
+        let mut tx = Transaction::new(1234, 56789, HiveTime(dt));
+
+        let transfer = Transfer {
+            from: "alice".to_string(),
+            to: "bob".to_string(),
+            amount: "1.000 HIVE".to_string(),
+            memo: "test memo".to_string(),
+        };
+        tx.append_op(Box::new(transfer));
+
+        let bytes = tx.to_bytes().unwrap();
+        let tx2 = Transaction::from_bytes(&bytes).unwrap();
+
+        assert_eq!(tx2.ref_block_num, 1234);
+        assert_eq!(tx2.ref_block_prefix, 56789);
+        assert_eq!(tx2.operations.len(), 1);
+
+        let dict = tx2.to_dict();
+        let ops = dict["operations"].as_array().unwrap();
+        assert_eq!(ops[0][0], "transfer");
+        assert_eq!(ops[0][1]["from"], "alice");
+        assert_eq!(ops[0][1]["to"], "bob");
+        assert_eq!(ops[0][1]["memo"], "test memo");
     }
 }

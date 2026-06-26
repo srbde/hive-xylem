@@ -13,10 +13,50 @@ pub fn serialize_varint(mut val: u64) -> Vec<u8> {
     buf
 }
 
+/// Helper to deserialize a LEB128 varint from bytes
+pub fn deserialize_varint(bytes: &[u8], pos: &mut usize) -> Result<u64, XylemError> {
+    let mut result: u64 = 0;
+    let mut shift = 0;
+    loop {
+        if *pos >= bytes.len() {
+            return Err(XylemError::SerializationError(
+                "unexpected end of input reading varint".to_string(),
+            ));
+        }
+        let byte = bytes[*pos];
+        *pos += 1;
+        result |= ((byte & 0x7f) as u64) << shift;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if shift >= 64 {
+            return Err(XylemError::SerializationError(
+                "varint too long".to_string(),
+            ));
+        }
+    }
+    Ok(result)
+}
+
 /// Helper to serialize a string with a varint length prefix
 pub fn serialize_string(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(&serialize_varint(s.len() as u64));
     buf.extend_from_slice(s.as_bytes());
+}
+
+/// Helper to deserialize a string with a varint length prefix
+pub fn deserialize_string(bytes: &[u8], pos: &mut usize) -> Result<String, XylemError> {
+    let len = deserialize_varint(bytes, pos)? as usize;
+    if *pos + len > bytes.len() {
+        return Err(XylemError::SerializationError(
+            "unexpected end of input reading string".to_string(),
+        ));
+    }
+    let s = std::str::from_utf8(&bytes[*pos..*pos + len])
+        .map_err(|e| XylemError::SerializationError(format!("invalid UTF-8: {}", e)))?;
+    *pos += len;
+    Ok(s.to_string())
 }
 
 /// Helper to serialize a list of strings with a varint length prefix
@@ -27,11 +67,50 @@ pub fn serialize_string_array(buf: &mut Vec<u8>, arr: &[String]) {
     }
 }
 
-pub trait Operation: std::fmt::Debug {
+/// Helper to deserialize a list of strings with a varint length prefix
+pub fn deserialize_string_array(bytes: &[u8], pos: &mut usize) -> Result<Vec<String>, XylemError> {
+    let len = deserialize_varint(bytes, pos)? as usize;
+    let mut result = Vec::with_capacity(len);
+    for _ in 0..len {
+        result.push(deserialize_string(bytes, pos)?);
+    }
+    Ok(result)
+}
+
+/// Deserialize a single operation from bytes. The op ID must already be consumed.
+pub fn deserialize_op(
+    op_id: u64,
+    bytes: &[u8],
+    pos: &mut usize,
+) -> Result<Box<dyn Operation>, XylemError> {
+    match op_id {
+        0 => Vote::from_bytes(bytes, pos),
+        1 => Comment::from_bytes(bytes, pos),
+        2 => Transfer::from_bytes(bytes, pos),
+        18 => CustomJson::from_bytes(bytes, pos),
+        _ => Err(XylemError::SerializationError(format!(
+            "unsupported operation ID: {}",
+            op_id
+        ))),
+    }
+}
+
+pub trait Operation: std::fmt::Debug + Send {
     /// Convert to JSON representation: (op_name, op_body)
     fn to_dict(&self) -> (String, Value);
     /// Serialize operation to binary bytes
     fn to_bytes(&self) -> Result<Vec<u8>, XylemError>;
+    /// Deserialize operation from binary bytes (after op ID has been read).
+    /// Default implementation returns unsupported error.
+    fn from_bytes(bytes: &[u8], pos: &mut usize) -> Result<Box<dyn Operation>, XylemError>
+    where
+        Self: Sized,
+    {
+        let _ = (bytes, pos);
+        Err(XylemError::SerializationError(
+            "deserialization not implemented for this operation".to_string(),
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +143,25 @@ impl Operation for Vote {
         serialize_string(&mut buf, &self.permlink);
         buf.extend_from_slice(&self.weight.to_le_bytes());
         Ok(buf)
+    }
+
+    fn from_bytes(bytes: &[u8], pos: &mut usize) -> Result<Box<dyn Operation>, XylemError> {
+        let voter = deserialize_string(bytes, pos)?;
+        let author = deserialize_string(bytes, pos)?;
+        let permlink = deserialize_string(bytes, pos)?;
+        if *pos + 2 > bytes.len() {
+            return Err(XylemError::SerializationError(
+                "unexpected end reading vote weight".to_string(),
+            ));
+        }
+        let weight = i16::from_le_bytes([bytes[*pos], bytes[*pos + 1]]);
+        *pos += 2;
+        Ok(Box::new(Vote {
+            voter,
+            author,
+            permlink,
+            weight,
+        }))
     }
 }
 
@@ -100,6 +198,19 @@ impl Operation for Transfer {
 
         serialize_string(&mut buf, &self.memo);
         Ok(buf)
+    }
+
+    fn from_bytes(bytes: &[u8], pos: &mut usize) -> Result<Box<dyn Operation>, XylemError> {
+        let from = deserialize_string(bytes, pos)?;
+        let to = deserialize_string(bytes, pos)?;
+        let asset = AssetAmount::from_bytes(bytes, pos)?;
+        let memo = deserialize_string(bytes, pos)?;
+        Ok(Box::new(Transfer {
+            from,
+            to,
+            amount: asset.to_string(),
+            memo,
+        }))
     }
 }
 
@@ -143,6 +254,25 @@ impl Operation for Comment {
         serialize_string(&mut buf, &self.json_metadata);
         Ok(buf)
     }
+
+    fn from_bytes(bytes: &[u8], pos: &mut usize) -> Result<Box<dyn Operation>, XylemError> {
+        let parent_author = deserialize_string(bytes, pos)?;
+        let parent_permlink = deserialize_string(bytes, pos)?;
+        let author = deserialize_string(bytes, pos)?;
+        let permlink = deserialize_string(bytes, pos)?;
+        let title = deserialize_string(bytes, pos)?;
+        let body = deserialize_string(bytes, pos)?;
+        let json_metadata = deserialize_string(bytes, pos)?;
+        Ok(Box::new(Comment {
+            parent_author,
+            parent_permlink,
+            author,
+            permlink,
+            title,
+            body,
+            json_metadata,
+        }))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +305,19 @@ impl Operation for CustomJson {
         serialize_string(&mut buf, &self.id);
         serialize_string(&mut buf, &self.json);
         Ok(buf)
+    }
+
+    fn from_bytes(bytes: &[u8], pos: &mut usize) -> Result<Box<dyn Operation>, XylemError> {
+        let required_auths = deserialize_string_array(bytes, pos)?;
+        let required_posting_auths = deserialize_string_array(bytes, pos)?;
+        let id = deserialize_string(bytes, pos)?;
+        let json = deserialize_string(bytes, pos)?;
+        Ok(Box::new(CustomJson {
+            id,
+            json,
+            required_auths,
+            required_posting_auths,
+        }))
     }
 }
 
