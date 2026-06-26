@@ -1,7 +1,6 @@
 use crate::errors::XylemError;
 use crate::operations::{deserialize_op, deserialize_varint, Operation};
 use crate::types::{Authority, HiveTime};
-use chrono::NaiveDateTime;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -41,9 +40,11 @@ impl Transaction {
         let exp_seconds = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
         pos += 4;
         let expiration = HiveTime(
-            NaiveDateTime::from_timestamp_opt(exp_seconds as i64, 0).ok_or_else(|| {
-                XylemError::SerializationError("invalid expiration timestamp".to_string())
-            })?,
+            chrono::DateTime::from_timestamp(exp_seconds as i64, 0)
+                .map(|dt| dt.naive_utc())
+                .ok_or_else(|| {
+                    XylemError::SerializationError("invalid expiration timestamp".to_string())
+                })?,
         );
 
         let ops_count = deserialize_varint(bytes, &mut pos)? as usize;
@@ -54,7 +55,6 @@ impl Transaction {
         }
 
         let _extensions_count = bytes[pos];
-        pos += 1;
 
         Ok(Transaction {
             ref_block_num,
