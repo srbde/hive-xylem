@@ -98,6 +98,43 @@ impl AssetAmount {
 
         Ok(buf)
     }
+
+    pub fn from_bytes(bytes: &[u8], pos: &mut usize) -> Result<Self, XylemError> {
+        if *pos + 16 > bytes.len() {
+            return Err(XylemError::SerializationError(
+                "unexpected end reading asset amount".to_string(),
+            ));
+        }
+        let satoshis = i64::from_le_bytes([
+            bytes[*pos],
+            bytes[*pos + 1],
+            bytes[*pos + 2],
+            bytes[*pos + 3],
+            bytes[*pos + 4],
+            bytes[*pos + 5],
+            bytes[*pos + 6],
+            bytes[*pos + 7],
+        ]);
+        *pos += 8;
+        let precision = bytes[*pos];
+        *pos += 1;
+        let symbol_bytes = &bytes[*pos..*pos + 7];
+        *pos += 7;
+        let symbol = std::str::from_utf8(symbol_bytes)
+            .map_err(|e| XylemError::SerializationError(format!("invalid symbol UTF-8: {}", e)))?
+            .trim_end_matches('\0')
+            .to_string();
+        let display_symbol = match symbol.as_str() {
+            "STEEM" => "HIVE",
+            "SBD" => "HBD",
+            other => other,
+        };
+        let value = satoshis as f64 / 10f64.powi(precision as i32);
+        Ok(AssetAmount {
+            value,
+            symbol: display_symbol.to_string(),
+        })
+    }
 }
 
 impl fmt::Display for AssetAmount {
