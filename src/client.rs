@@ -334,6 +334,51 @@ impl Client {
         Ok(ops)
     }
 
+    /// Retrieve applied operations for a range of blocks concurrently.
+    pub async fn get_ops_in_block_range(
+        &self,
+        starting_block_num: u32,
+        count: u32,
+    ) -> Result<Vec<AppliedOperation>, XylemError> {
+        if count == 0 {
+            return Err(XylemError::SerializationError(
+                "block range count must be greater than 0".to_string(),
+            ));
+        }
+        if count > 1000 {
+            return Err(XylemError::SerializationError(
+                "block range count cannot exceed 1000".to_string(),
+            ));
+        }
+
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let sem = Arc::new(Semaphore::new(20));
+        let mut futures = Vec::new();
+
+        for i in 0..count {
+            let block_num = starting_block_num + i;
+            let sem = sem.clone();
+            futures.push(async move {
+                let _permit = sem.acquire().await.map_err(|e| {
+                    XylemError::RpcError(format!("semaphore acquire failed: {}", e))
+                })?;
+                self.get_ops_in_block(block_num, false).await
+            });
+        }
+
+        let results: Vec<Result<Vec<AppliedOperation>, XylemError>> =
+            futures::future::join_all(futures).await;
+
+        let mut all_ops = Vec::new();
+        for res in results {
+            all_ops.extend(res?);
+        }
+
+        Ok(all_ops)
+    }
+
     /// Retrieve Resource Credit resource parameters.
     pub async fn get_rc_resource_params(&self) -> Result<serde_json::Value, XylemError> {
         self.call("rc_api", "get_rc_resource_params", serde_json::json!({}))
@@ -771,5 +816,117 @@ mod tests {
         let res = client.call("test", "method", json!([])).await.unwrap();
         assert_eq!(res.as_str().unwrap(), "success");
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_ops_in_block_range() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        use std::sync::Arc;
+
+        let max_concurrent_calls = Arc::new(AtomicI64::new(0));
+        let active_calls = Arc::new(AtomicI64::new(0));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}", port);
+
+        let max_concurrent_calls_clone = max_concurrent_calls.clone();
+        let active_calls_clone = active_calls.clone();
+
+        tokio::spawn(async move {
+            for _ in 0..5 {
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    let max_c = max_concurrent_calls_clone.clone();
+                    let active_c = active_calls_clone.clone();
+                    tokio::spawn(async move {
+                        let mut buf = [0; 4096];
+                        let _ = stream.read(&mut buf).await;
+
+                        let current_active = active_c.fetch_add(1, Ordering::Relaxed) + 1;
+                        let mut current_max = max_c.load(Ordering::Relaxed);
+                        while current_active > current_max {
+                            match max_c.compare_exchange_weak(
+                                current_max,
+                                current_active,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current_max = actual,
+                            }
+                        }
+
+                        let req_str = String::from_utf8_lossy(&buf);
+                        let block_num = if let Some(pos) = req_str.find("get_ops_in_block") {
+                            if let Some(params_start) = req_str[pos..].find('[') {
+                                let sub = &req_str[pos + params_start..];
+                                if let Some(params_end) = sub.find(']') {
+                                    let params_str = &sub[..params_end + 1];
+                                    let params: Vec<serde_json::Value> =
+                                        serde_json::from_str(params_str).unwrap_or_default();
+                                    params.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32
+                                } else {
+                                    0
+                                }
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+                        active_c.fetch_sub(1, Ordering::Relaxed);
+
+                        let response_body = json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "result": [
+                                {
+                                    "trx_id": format!("trx-{}", block_num),
+                                    "block": block_num,
+                                    "trx_in_block": 0,
+                                    "op_in_trx": 0,
+                                    "virtual_op": false,
+                                    "op": ["vote", {"voter": "alice"}]
+                                }
+                            ]
+                        })
+                        .to_string();
+
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                    });
+                }
+            }
+        });
+
+        let client = Client::new(vec![url], 2);
+        let ops = client.get_ops_in_block_range(100, 5).await.unwrap();
+
+        assert_eq!(ops.len(), 5);
+        for (i, op) in ops.iter().enumerate() {
+            let expected_block = 100 + i as u32;
+            assert_eq!(op.block, expected_block);
+        }
+
+        assert!(max_concurrent_calls.load(Ordering::Relaxed) > 1);
+
+        // Test validation for count = 0
+        let err_zero = client.get_ops_in_block_range(100, 0).await.unwrap_err();
+        assert!(err_zero
+            .to_string()
+            .contains("block range count must be greater than 0"));
+
+        // Test validation for count > 1000
+        let err_too_large = client.get_ops_in_block_range(100, 1001).await.unwrap_err();
+        assert!(err_too_large
+            .to_string()
+            .contains("block range count cannot exceed 1000"));
     }
 }
