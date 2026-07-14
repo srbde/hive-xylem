@@ -1,6 +1,6 @@
 [package]
 name = "hive-xylem"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Modern, secure, and high-performance Rust SDK for the Hive blockchain."
 license = "MIT OR Apache-2.0"
@@ -23,3 +23,4 @@ chrono = { version = "0.4", features = ["serde"] }
 aes = "0.8"
 cbc = "0.1"
 rand = "0.8"
+futures = "0.3"
