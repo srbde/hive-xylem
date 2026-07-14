@@ -191,6 +191,10 @@ pub struct AccountData {
     pub hbd_balance: String,
     pub vesting_shares: String,
     pub created: HiveTime,
+    pub owner: Authority,
+    pub active: Authority,
+    pub posting: Authority,
+    pub memo_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,11 +207,39 @@ pub struct BlockHeader {
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Authority {
     pub weight_threshold: u32,
     pub account_auths: HashMap<String, u16>,
     pub key_auths: HashMap<String, u16>,
+}
+
+impl Serialize for Authority {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        struct WireAuthority<'a> {
+            weight_threshold: u32,
+            account_auths: Vec<(&'a String, &'a u16)>,
+            key_auths: Vec<(&'a String, &'a u16)>,
+        }
+
+        let mut account_auths: Vec<(&String, &u16)> = self.account_auths.iter().collect();
+        account_auths.sort_by(|a, b| a.0.cmp(b.0));
+
+        let mut key_auths: Vec<(&String, &u16)> = self.key_auths.iter().collect();
+        key_auths.sort_by(|a, b| a.0.cmp(b.0));
+
+        let wire = WireAuthority {
+            weight_threshold: self.weight_threshold,
+            account_auths,
+            key_auths,
+        };
+
+        wire.serialize(serializer)
+    }
 }
 
 impl<'de> Deserialize<'de> for Authority {
@@ -308,6 +340,19 @@ pub struct VestingDelegation {
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationTuple(pub String, pub serde_json::Value);
 
+impl OperationTuple {
+    pub fn custom_json_id(&self) -> Option<String> {
+        if self.0 == "custom_json" {
+            self.1
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for OperationTuple {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -403,4 +448,115 @@ pub enum StreamingMode {
     Latest,
     #[serde(rename = "irreversible")]
     Irreversible,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_operation_tuple_custom_json_id() {
+        let json_data = json!(["custom_json", {"id": "hiveidentity", "json": "{}", "required_posting_auths": ["alice"]}]);
+        let ot: OperationTuple = serde_json::from_value(json_data).unwrap();
+        assert_eq!(ot.custom_json_id(), Some("hiveidentity".to_string()));
+
+        let json_data_other =
+            json!(["transfer", {"from": "alice", "to": "bob", "amount": "1.000 HIVE"}]);
+        let ot_other: OperationTuple = serde_json::from_value(json_data_other).unwrap();
+        assert_eq!(ot_other.custom_json_id(), None);
+
+        let json_data_missing = json!(["custom_json", {"json": "{}"}]);
+        let ot_missing: OperationTuple = serde_json::from_value(json_data_missing).unwrap();
+        assert_eq!(ot_missing.custom_json_id(), None);
+    }
+
+    #[test]
+    fn test_authority_json() {
+        // Deserialization from wire format
+        let json_data = json!({
+            "weight_threshold": 2,
+            "account_auths": [["bob", 1]],
+            "key_auths": [["STM5key1111111111111111111111111111111111111111111111", 2]]
+        });
+        let auth: Authority = serde_json::from_value(json_data).unwrap();
+        assert_eq!(auth.weight_threshold, 2);
+        assert_eq!(auth.account_auths.get("bob"), Some(&1));
+        assert_eq!(
+            auth.key_auths
+                .get("STM5key1111111111111111111111111111111111111111111111"),
+            Some(&2)
+        );
+
+        // Serialization
+        let mut account_auths = HashMap::new();
+        account_auths.insert("carol".to_string(), 2);
+        account_auths.insert("bob".to_string(), 1);
+        let mut key_auths = HashMap::new();
+        key_auths.insert("STM5keyone".to_string(), 1);
+
+        let auth_orig = Authority {
+            weight_threshold: 3,
+            account_auths,
+            key_auths,
+        };
+
+        let serialized = serde_json::to_value(&auth_orig).unwrap();
+        let expected = json!({
+            "weight_threshold": 3,
+            "account_auths": [["bob", 1], ["carol", 2]],
+            "key_auths": [["STM5keyone", 1]]
+        });
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_account_data_deserialization() {
+        let json_data = json!({
+            "name": "alice",
+            "voting_power": 10000.0,
+            "voting_manabar": {
+                "current_mana": 1000000.0,
+                "last_update_time": 1718888888
+            },
+            "last_vote_time": "2026-06-09T12:00:00",
+            "balance": "100.000 HIVE",
+            "hbd_balance": "50.000 HBD",
+            "vesting_shares": "1000000.000000 VESTS",
+            "created": "2026-06-09T12:00:00",
+            "owner": {
+                "weight_threshold": 1,
+                "account_auths": [],
+                "key_auths": [["STM5ownerkey1111111111111111111111111111111111111111", 1]]
+            },
+            "active": {
+                "weight_threshold": 2,
+                "account_auths": [["bob", 1]],
+                "key_auths": [["STM5activekey111111111111111111111111111111111111111", 2]]
+            },
+            "posting": {
+                "weight_threshold": 1,
+                "account_auths": [],
+                "key_auths": [["STM5postingkey11111111111111111111111111111111111111", 1]]
+            },
+            "memo_key": "STM5memokey1111111111111111111111111111111111111111111"
+        });
+
+        let acc: AccountData = serde_json::from_value(json_data).unwrap();
+        assert_eq!(acc.name, "alice");
+        assert_eq!(
+            acc.memo_key,
+            "STM5memokey1111111111111111111111111111111111111111111"
+        );
+        assert_eq!(acc.owner.weight_threshold, 1);
+        assert_eq!(
+            acc.owner
+                .key_auths
+                .get("STM5ownerkey1111111111111111111111111111111111111111"),
+            Some(&1)
+        );
+        assert_eq!(acc.active.weight_threshold, 2);
+        assert_eq!(acc.active.account_auths.get("bob"), Some(&1));
+        assert_eq!(acc.posting.weight_threshold, 1);
+    }
 }
