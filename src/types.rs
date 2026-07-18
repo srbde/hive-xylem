@@ -341,6 +341,46 @@ pub struct VestingDelegation {
 pub struct OperationTuple(pub String, pub serde_json::Value);
 
 impl OperationTuple {
+    /// Extracts a typed transfer operation, returning `Ok(None)` for unrelated operations.
+    pub fn transfer(&self) -> Result<Option<crate::operations::Transfer>, XylemError> {
+        let Some(data) = self.matching_object("transfer")? else {
+            return Ok(None);
+        };
+
+        let from = required_string(data, "from")?;
+        let to = required_string(data, "to")?;
+        let amount = required_string(data, "amount")?;
+        AssetAmount::parse(&amount).map_err(|err| XylemError::MalformedAmount(err.to_string()))?;
+        let memo = match data.get("memo") {
+            None => String::new(),
+            Some(value) => value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| XylemError::WrongOperationFieldType("memo".to_string()))?,
+        };
+
+        Ok(Some(crate::operations::Transfer {
+            from,
+            to,
+            amount,
+            memo,
+        }))
+    }
+
+    /// Extracts a typed custom JSON operation, returning `Ok(None)` for unrelated operations.
+    pub fn custom_json(&self) -> Result<Option<crate::operations::CustomJson>, XylemError> {
+        let Some(data) = self.matching_object("custom_json")? else {
+            return Ok(None);
+        };
+
+        Ok(Some(crate::operations::CustomJson {
+            id: required_string(data, "id")?,
+            json: required_string(data, "json")?,
+            required_auths: required_string_array(data, "required_auths")?,
+            required_posting_auths: required_string_array(data, "required_posting_auths")?,
+        }))
+    }
+
     pub fn custom_json_id(&self) -> Option<String> {
         if self.0 == "custom_json" {
             self.1
@@ -351,6 +391,55 @@ impl OperationTuple {
             None
         }
     }
+
+    fn matching_object(
+        &self,
+        operation_type: &str,
+    ) -> Result<Option<&serde_json::Map<String, serde_json::Value>>, XylemError> {
+        if self.0 != operation_type {
+            return Ok(None);
+        }
+        self.1.as_object().map(Some).ok_or_else(|| {
+            XylemError::MalformedOperationTuple("operation value is not an object".to_string())
+        })
+    }
+}
+
+fn required_string(
+    data: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<String, XylemError> {
+    let value = data
+        .get(field)
+        .ok_or_else(|| XylemError::MissingOperationField(field.to_string()))?;
+    let value = value
+        .as_str()
+        .ok_or_else(|| XylemError::WrongOperationFieldType(field.to_string()))?;
+    if value.is_empty() {
+        return Err(XylemError::MissingOperationField(field.to_string()));
+    }
+    Ok(value.to_string())
+}
+
+fn required_string_array(
+    data: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Vec<String>, XylemError> {
+    let value = data
+        .get(field)
+        .ok_or_else(|| XylemError::MissingOperationField(field.to_string()))?;
+    let values = value
+        .as_array()
+        .ok_or_else(|| XylemError::MalformedAuthorizationArray(field.to_string()))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_str().map(str::to_owned).ok_or_else(|| {
+                XylemError::MalformedAuthorizationArray(format!("{}[{}]", field, index))
+            })
+        })
+        .collect()
 }
 
 impl<'de> Deserialize<'de> for OperationTuple {
@@ -469,6 +558,102 @@ mod tests {
         let json_data_missing = json!(["custom_json", {"json": "{}"}]);
         let ot_missing: OperationTuple = serde_json::from_value(json_data_missing).unwrap();
         assert_eq!(ot_missing.custom_json_id(), None);
+    }
+
+    #[test]
+    fn test_operation_tuple_transfer_helpers() {
+        for value in [
+            json!(["transfer", {"from": "alice", "to": "bob", "amount": "1.000 HIVE", "memo": "hi"}]),
+            json!({"type": "transfer", "value": {"from": "alice", "to": "bob", "amount": "2.500 HBD"}}),
+        ] {
+            let operation: OperationTuple = serde_json::from_value(value).unwrap();
+            let transfer = operation.transfer().unwrap().unwrap();
+            assert_eq!(transfer.from, "alice");
+            assert_eq!(transfer.to, "bob");
+            assert!(transfer.amount == "1.000 HIVE" || transfer.amount == "2.500 HBD");
+            assert!(transfer.memo == "hi" || transfer.memo.is_empty());
+        }
+
+        let unrelated: OperationTuple = serde_json::from_value(json!([
+            "vote",
+            {"voter": "alice"}
+        ]))
+        .unwrap();
+        assert!(unrelated.transfer().unwrap().is_none());
+
+        for field in ["from", "to", "amount"] {
+            let mut data = json!({"from": "alice", "to": "bob", "amount": "1.000 HIVE"});
+            data.as_object_mut().unwrap().remove(field);
+            let operation = OperationTuple("transfer".to_string(), data);
+            assert!(matches!(
+                operation.transfer(),
+                Err(XylemError::MissingOperationField(ref name)) if name == field
+            ));
+        }
+
+        let wrong_type = OperationTuple(
+            "transfer".to_string(),
+            json!({"from": "alice", "to": "bob", "amount": 1.0}),
+        );
+        assert!(matches!(
+            wrong_type.transfer(),
+            Err(XylemError::WrongOperationFieldType(ref name)) if name == "amount"
+        ));
+
+        let malformed_amount = OperationTuple(
+            "transfer".to_string(),
+            json!({"from": "alice", "to": "bob", "amount": "not-an-amount"}),
+        );
+        assert!(matches!(
+            malformed_amount.transfer(),
+            Err(XylemError::MalformedAmount(_))
+        ));
+    }
+
+    #[test]
+    fn test_operation_tuple_custom_json_helper() {
+        for value in [
+            json!(["custom_json", {"id": "x/hiveidentity", "required_auths": ["alice"], "required_posting_auths": [], "json": "{\"ok\":true}"}]),
+            json!({"type": "custom_json", "value": {"id": "x/hivebridge", "required_auths": [], "required_posting_auths": ["bob"], "json": "payload"}}),
+        ] {
+            let operation: OperationTuple = serde_json::from_value(value).unwrap();
+            let custom_json = operation.custom_json().unwrap().unwrap();
+            assert!(!custom_json.id.is_empty());
+            assert!(!custom_json.json.is_empty());
+            assert!(
+                custom_json.required_auths.is_empty()
+                    || custom_json.required_auths == vec!["alice".to_string()]
+            );
+            assert!(
+                custom_json.required_posting_auths.is_empty()
+                    || custom_json.required_posting_auths == vec!["bob".to_string()]
+            );
+        }
+
+        let missing_id = OperationTuple(
+            "custom_json".to_string(),
+            json!({"json": "{}", "required_auths": [], "required_posting_auths": []}),
+        );
+        assert!(matches!(
+            missing_id.custom_json(),
+            Err(XylemError::MissingOperationField(ref name)) if name == "id"
+        ));
+
+        let malformed_auths = OperationTuple(
+            "custom_json".to_string(),
+            json!({"id": "id", "json": "{}", "required_auths": ["alice", 1], "required_posting_auths": []}),
+        );
+        assert!(matches!(
+            malformed_auths.custom_json(),
+            Err(XylemError::MalformedAuthorizationArray(ref name)) if name == "required_auths[1]"
+        ));
+
+        let unrelated: OperationTuple = serde_json::from_value(json!([
+            "transfer",
+            {"from": "alice", "to": "bob", "amount": "1.000 HIVE"}
+        ]))
+        .unwrap();
+        assert!(unrelated.custom_json().unwrap().is_none());
     }
 
     #[test]

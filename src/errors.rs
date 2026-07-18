@@ -10,6 +10,11 @@ pub enum XylemError {
     RpcError(String),
     HttpError(String),
     JsonError(String),
+    MalformedOperationTuple(String),
+    MissingOperationField(String),
+    WrongOperationFieldType(String),
+    MalformedAmount(String),
+    MalformedAuthorizationArray(String),
 }
 
 impl std::error::Error for XylemError {}
@@ -25,6 +30,19 @@ impl fmt::Display for XylemError {
             XylemError::RpcError(s) => write!(f, "RPC error: {}", s),
             XylemError::HttpError(s) => write!(f, "HTTP error: {}", s),
             XylemError::JsonError(s) => write!(f, "JSON error: {}", s),
+            XylemError::MalformedOperationTuple(s) => {
+                write!(f, "malformed operation tuple: {}", s)
+            }
+            XylemError::MissingOperationField(s) => {
+                write!(f, "missing operation field: {}", s)
+            }
+            XylemError::WrongOperationFieldType(s) => {
+                write!(f, "wrong operation field type: {}", s)
+            }
+            XylemError::MalformedAmount(s) => write!(f, "malformed operation amount: {}", s),
+            XylemError::MalformedAuthorizationArray(s) => {
+                write!(f, "malformed authorization array: {}", s)
+            }
         }
     }
 }
