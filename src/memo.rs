@@ -54,11 +54,33 @@ pub fn deserialize_varint(buf: &[u8]) -> Result<(u64, usize), XylemError> {
     Ok((val, idx))
 }
 
+/// X coordinate of an ECDH shared point.
+///
+/// `secp256k1::ecdh::shared_secret_point` returns `X ‖ Y` (64 bytes, no prefix
+/// byte). Uncompressed SEC1 public keys are 65 bytes and do start with `0x04`;
+/// that prefix is not present here, so the X coordinate is the first 32 bytes.
+fn shared_secret_x(shared_point: &[u8; 64]) -> &[u8] {
+    &shared_point[0..32]
+}
+
 /// Encrypt a memo if it starts with "#".
 pub fn encode(
     sender_wif: &str,
     recipient_pub_key_str: &str,
     memo: &str,
+) -> Result<String, XylemError> {
+    encode_with_nonce(sender_wif, recipient_pub_key_str, memo, rand::random())
+}
+
+/// Encrypt a memo with a caller-supplied nonce.
+///
+/// Same rules as [`encode`]. A fixed nonce lets an existing Hive memo be
+/// reproduced and checked against other clients.
+pub fn encode_with_nonce(
+    sender_wif: &str,
+    recipient_pub_key_str: &str,
+    memo: &str,
+    nonce: u64,
 ) -> Result<String, XylemError> {
     if !memo.starts_with('#') {
         return Ok(memo.to_string());
@@ -76,12 +98,10 @@ pub fn encode(
     // Parse recipient public key
     let (recipient_pub, recipient_pub_bytes) = parse_public_key(recipient_pub_key_str)?;
 
-    // Generate random u64 nonce
-    let nonce: u64 = rand::random();
-
-    // Derive shared secret X-coordinate of P = sender_priv * recipient_pub
+    // Derive shared secret X-coordinate of P = sender_priv * recipient_pub.
+    // shared_secret_point returns X ‖ Y (64 bytes, no prefix byte).
     let shared_point = secp256k1::ecdh::shared_secret_point(&recipient_pub, &sender_priv);
-    let shared_x = &shared_point[1..33]; // skip prefix byte to get X-coordinate
+    let shared_x = shared_secret_x(&shared_point);
 
     // S = sha512(shared_x)
     let mut hasher = Sha512::new();
@@ -190,9 +210,9 @@ pub fn decode(wif: &str, memo: &str) -> Result<String, XylemError> {
     let other_pub = PublicKey::from_slice(other_pub_bytes)
         .map_err(|e| XylemError::CryptoError(e.to_string()))?;
 
-    // Derive shared secret
+    // Derive shared secret. shared_secret_point returns X ‖ Y (64 bytes, no prefix byte).
     let shared_point = secp256k1::ecdh::shared_secret_point(&other_pub, &my_priv);
-    let shared_x = &shared_point[1..33];
+    let shared_x = shared_secret_x(&shared_point);
 
     // S = sha512(shared_x)
     let mut hasher = Sha512::new();
@@ -268,5 +288,40 @@ mod tests {
 
         let decrypted = decode(sender_wif(), &encrypted).unwrap();
         assert_eq!(decrypted, memo);
+    }
+
+    #[test]
+    fn test_memo_ecdh_hive_vector() {
+        // X coordinate of sender_wif * recipient_pub, checked independently by
+        // scaling the recipient point (see upstream srbde/hive-xylem#9).
+        let priv_bytes = decode_wif(sender_wif()).unwrap();
+        let sender_priv = SecretKey::from_slice(&priv_bytes).unwrap();
+        let (recipient, _) = parse_public_key(recipient_pub()).unwrap();
+        let shared_point = secp256k1::ecdh::shared_secret_point(&recipient, &sender_priv);
+        assert_eq!(shared_point.len(), 64);
+        assert_eq!(
+            hex::encode(shared_secret_x(&shared_point)),
+            "41aec6a617873711cdc9db5da4e6a4f6e237fb28a3beadfc43c097e8c7193884"
+        );
+
+        // Ciphertext computed outside this crate (Node secp256k1 ECDH + SHA-512
+        // + AES-256-CBC) for memo "#Hello secure world!" and nonce
+        // 0x0102030405060708. A self-round-trip cannot catch a shared-secret
+        // slice error; this vector can.
+        let memo = "#Hello secure world!";
+        let encrypted =
+            encode_with_nonce(sender_wif(), recipient_pub(), memo, 0x0102_0304_0506_0708).unwrap();
+        assert_eq!(
+            encrypted,
+            "#AiXWKsmWbHTz5h2nrjKcFob567v8z1buixTLW6AkJSApkFxWBhp9aNefPRrgsx35N2Y4HkopNi6dgFevetUa4hvButYJNDMaHWfaHxii4nBdTqPTSRgoAPnmsq3mHeUxJHkLkcmX2CraksY4EUKNk1R"
+        );
+        assert_eq!(decode(sender_wif(), &encrypted).unwrap(), memo);
+    }
+
+    #[test]
+    fn test_plaintext_memo_unchanged() {
+        let memo = "not encrypted";
+        assert_eq!(encode(sender_wif(), recipient_pub(), memo).unwrap(), memo);
+        assert_eq!(decode(sender_wif(), memo).unwrap(), memo);
     }
 }
